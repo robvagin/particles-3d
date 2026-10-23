@@ -129,19 +129,20 @@ legend{font:600 10.5px var(--h-sans);letter-spacing:.07em;color:var(--h-ink3)}
       </fieldset>
     </div>
     <div class="tab" data-tab="scene">
-      <fieldset><legend>Home shape</legend>
+      <fieldset><legend>Soft form</legend>
         <div class="seg" id="shapeSeg">
           <button data-s="0">Sphere</button><button data-s="1">Ball</button>
           <button data-s="2">Box</button><button data-s="3">Torus</button><button data-s="4">Disc</button>
         </div>
+        <p class="note">A gentle attractor, not a target: the flock flows through it and never freezes into it.</p>
       </fieldset>
       <fieldset id="gScene"><legend>Particles</legend></fieldset>
       <fieldset><legend>Presets</legend>
         <div class="seg" id="presetSeg">
-          <button data-p="cloud">Cloud</button><button data-p="swirl">Swirl</button>
-          <button data-p="shell">Shell</button><button data-p="ribbon">Ribbon</button>
+          <button data-p="flock">Flock</button><button data-p="smoke">Smoke</button>
+          <button data-p="plankton">Plankton</button><button data-p="ribbon">Ribbon</button>
         </div>
-        <div class="row" style="grid-template-columns:1fr auto"><label>Auto-rotate</label>
+        <div class="row" style="grid-template-columns:1fr auto"><label>Drift camera</label>
           <input type="checkbox" id="autoRot"></div>
       </fieldset>
     </div>
@@ -161,16 +162,21 @@ legend{font:600 10.5px var(--h-sans);letter-spacing:.07em;color:var(--h-ink3)}
 </div>
 
 <div id="transport">
-  <button id="tPlay">⟲ Replay</button>
-  <button id="tLoop" aria-pressed="true">Loop</button>
-  <label class="tlab">Hold<input type="range" id="tHold" min="0.5" max="8" step="0.1"></label>
-  <label class="tlab">Speed<input type="range" id="tSpeed" min="0.4" max="2" step="0.05" value="1"></label>
+  <button id="tPlay">⟲ Re-seed</button>
+  <button id="tLoop" aria-pressed="true">● Live</button>
+  <label class="tlab">Speed<input type="range" id="tSpeed" min="0.2" max="2" step="0.05" value="1"></label>
 </div>
 <button id="invBtn" aria-pressed="false" title="Invert scene (I)">◑</button>
-<div id="hint">drag orbit · scroll zoom · ⟲ re-assemble · Loop breathe · I invert · H hide UI</div>
+<div id="hint">drag orbit · scroll zoom · space pause · ⟲ re-seed · I invert · H hide UI</div>
 <div id="fps"></div>
 
 <script>
+window.__FRAMES = 0;
+
+window.__READY = 0;
+
+window.__ERROR = '';
+
 const boot = document.getElementById('boot');
 
 const canvas = document.getElementById('cv');
@@ -184,11 +190,13 @@ const gl = canvas.getContext('webgl2', {
 if (!gl) {
   boot.style.display = 'block';
   boot.innerHTML = 'WebGL2 is not available in this viewer.<br>Open this file in <b>Chrome / Safari / Firefox</b> (not an in-app preview).';
+  window.__ERROR = 'no webgl2';
 } else {
   try {
     main();
   } catch (e) {
     boot.style.display = 'block';
+    window.__ERROR = String(e && e.message || e);
     boot.innerHTML = 'WebGL error: <span style="opacity:.6">' + (e && e.message || e) + '</span>';
     console.error(e);
   }
@@ -200,14 +208,6 @@ function main() {
     speed: lerp(.35, 1.9, clamp01(x)),
     ease: clamp01(y)
   });
-  function revealAt(t, dur, hold, mode) {
-    const OUT = .9, cyc = dur + hold + OUT + .3;
-    if (mode !== 'loop') return clamp01(t / dur);
-    const tt = (t % cyc + cyc) % cyc;
-    if (tt < dur) return clamp01(tt / dur);
-    if (tt < dur + hold) return 1;
-    return clamp01(1 - (tt - dur - hold) / OUT);
-  }
   const hexRGB = h => {
     h = h.replace('#', '');
     return [ parseInt(h.slice(0, 2), 16) / 255, parseInt(h.slice(2, 4), 16) / 255, parseInt(h.slice(4, 6), 16) / 255 ];
@@ -264,40 +264,51 @@ function main() {
     return o;
   }
   const isMobile = matchMedia('(pointer:coarse)').matches || (navigator.hardwareConcurrency || 8) <= 4;
+  const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
   const MAXCOUNT = isMobile ? 9e4 : 3e5;
   const state = {
     scene: {
       count: isMobile ? 45e3 : 13e4,
       spread: 1,
-      size: 1.7,
-      flow: .6,
+      size: 1.9,
+      flow: .85,
       noise: 1,
-      swirl: .45,
-      shape: 0
+      swirl: .5,
+      shape: 1,
+      cohesion: .9,
+      layers: .6,
+      fog: .7,
+      veil: .7
     },
     motion: {
       x: .4,
-      y: .6,
+      y: .55,
       speed: 1
     },
     show: {
-      reveal: 1.3,
-      hold: 2.4,
-      speed: 1
+      reveal: .6,
+      rec: 10,
+      speed: reduced ? .25 : 1
     },
     palette: [ '#1a1a1a', '#f6f5f2' ],
     view: {
-      autoRot: 0
+      autoRot: reduced ? 0 : 1
     },
     anim: {
       t: 0,
-      playing: 1,
-      mode: 'loop'
+      playing: 1
     }
   };
   let needs = true;
-  const VS = `#version 300 es\n    precision highp float;\n    in vec3 aPos; in float aSeed; in float aScl;\n    uniform mat4 uProj,uView;\n    uniform float uTime,uFlow,uNoise,uSwirl,uSpread,uSize,uReveal,uDpr;\n    out float vA;\n    void main(){\n      vec3 p=aPos*uSpread; float t=uTime; float ph=aSeed*6.2831;\n      vec3 f=vec3(\n        sin(p.y*1.6*uNoise+t+ph)+cos(p.z*1.1*uNoise-t),\n        sin(p.z*1.6*uNoise+t*1.1)+cos(p.x*1.1*uNoise-t+ph),\n        sin(p.x*1.6*uNoise+t*0.9)+cos(p.y*1.1*uNoise-t));\n      p+=f*(0.16*uFlow);\n      float a=uSwirl*(0.6+0.4*sin(t*0.5))*(0.8-length(p.xz)*0.15);\n      float ca=cos(a),sa=sin(a); p.xz=mat2(ca,-sa,sa,ca)*p.xz;\n      float rv=smoothstep(0.0,1.0,clamp(uReveal*1.15-aSeed*0.15,0.0,1.0));\n      p*=rv; vA=rv;\n      vec4 mv=uView*vec4(p,1.0);\n      gl_Position=uProj*mv;\n      gl_PointSize=uSize*aScl*(4.0/max(0.001,-mv.z))*uDpr*(0.4+0.6*rv);\n    }`;
-  const FS = `#version 300 es\n    precision mediump float;\n    in float vA; uniform vec3 uColor; out vec4 o;\n    void main(){ vec2 d=gl_PointCoord-0.5; float m=smoothstep(0.5,0.12,length(d));\n      if(m<=0.001) discard; o=vec4(uColor, m*0.55*vA); }`;
+  const WARM = {
+    steps: 96,
+    dt: 1 / 24
+  };
+  const NOISE = `\n    vec3 hash3(vec3 p){\n      p=vec3(dot(p,vec3(127.1,311.7,74.7)),dot(p,vec3(269.5,183.3,246.1)),dot(p,vec3(113.5,271.9,124.6)));\n      return -1.0+2.0*fract(sin(p)*43758.5453123); }\n    vec4 noised(vec3 x){\n      vec3 i=floor(x), f=fract(x);\n      vec3 u=f*f*f*(f*(f*6.0-15.0)+10.0), du=30.0*f*f*(f*(f-2.0)+1.0);\n      vec3 ga=hash3(i), gb=hash3(i+vec3(1,0,0)), gc=hash3(i+vec3(0,1,0)), gd=hash3(i+vec3(1,1,0));\n      vec3 ge=hash3(i+vec3(0,0,1)), gf=hash3(i+vec3(1,0,1)), gg=hash3(i+vec3(0,1,1)), gh=hash3(i+vec3(1,1,1));\n      float va=dot(ga,f), vb=dot(gb,f-vec3(1,0,0)), vc=dot(gc,f-vec3(0,1,0)), vd=dot(gd,f-vec3(1,1,0));\n      float ve=dot(ge,f-vec3(0,0,1)), vf=dot(gf,f-vec3(1,0,1)), vg=dot(gg,f-vec3(0,1,1)), vh=dot(gh,f-vec3(1,1,1));\n      return vec4(\n        va+u.x*(vb-va)+u.y*(vc-va)+u.z*(ve-va)+u.x*u.y*(va-vb-vc+vd)+u.y*u.z*(va-vc-ve+vg)+u.z*u.x*(va-vb-ve+vf)+(-va+vb+vc-vd+ve-vf-vg+vh)*u.x*u.y*u.z,\n        ga+u.x*(gb-ga)+u.y*(gc-ga)+u.z*(ge-ga)+u.x*u.y*(ga-gb-gc+gd)+u.y*u.z*(ga-gc-ge+gg)+u.z*u.x*(ga-gb-ge+gf)+(-ga+gb+gc-gd+ge-gf-gg+gh)*u.x*u.y*u.z\n        +du*(vec3(vb,vc,ve)-va+u.yzx*vec3(va-vb-vc+vd,va-vc-ve+vg,va-vb-ve+vf)+u.zxy*vec3(va-vb-ve+vf,va-vb-vc+vd,va-vc-ve+vg)+u.yzx*u.zxy*(-va+vb+vc-vd+ve-vf-vg+vh))); }\n    // divergence-free field: curl of a vector potential made of three noises\n    vec3 curl(vec3 p){\n      vec3 g0=noised(p).yzw, g1=noised(p+vec3(31.4,17.2,9.1)).yzw, g2=noised(p+vec3(-12.7,24.6,41.3)).yzw;\n      return vec3(g2.y-g1.z, g0.z-g2.x, g1.x-g0.y); }`;
+  const UPD = `#version 300 es\n    precision highp float;\n    in vec3 aPos; in vec3 aVel; in float aSeed; in float aLay;\n    uniform float uTime,uDt,uFlow,uNoise,uSwirl,uR,uCoh,uPar,uTau,uShape,uVeil;\n    uniform vec3 uCtr,uCtrV,uAx;\n    out vec3 vPos; out vec3 vVel;\n    ${NOISE}\n    float sdf(vec3 q){\n      vec3 s=q/uAx;\n      if(uShape<1.5)  return (length(s)-uR)*min(uAx.x,min(uAx.y,uAx.z));\n      if(uShape<2.5){ vec3 d=abs(s)-vec3(uR*0.78); return length(max(d,0.0))+min(max(d.x,max(d.y,d.z)),0.0); }\n      if(uShape<3.5){ vec2 t=vec2(length(s.xz)-uR*0.85,s.y); return length(t)-uR*0.36; }\n      vec2 d=vec2(length(s.xz)-uR,abs(s.y)-uR*0.05); return min(max(d.x,d.y),0.0)+length(max(d,0.0)); }\n    void main(){\n      float t=uTime, l=aLay;\n      float grp=min(2.0,floor(l*3.0));                       // three layers: own veils, own pace\n      float sp=1.0+uPar*(grp-1.0)*0.55;\n      vec3 q=aPos-uCtr;\n      vec3 off=vec3(sin(t*0.071),cos(t*0.053),sin(t*0.062+1.0))*2.7+vec3(grp*13.7,grp*5.3,-grp*8.1);\n      float f1=uNoise/uR;\n      // large, slow curl: moves matter along itself without piling up\n      vec3 c=curl(q*f1*0.62+off)+0.35*curl(q*f1*1.45+off*1.7+vec3(7.0,3.0,5.0));\n      vec3 vt=c*(uFlow*uR*0.5)*sp;\n      // veils: slide toward the zero-set of a slow scalar field, so the cloud gathers into thin moving sheets\n      vec4 nv=noised(q*f1*0.78+off*0.8+vec3(3.0,9.0,1.0));\n      vt-=uVeil*uR*0.55*nv.x*nv.yzw*sp;\n      float rr=length(q.xz)/uR;\n      float om=uSwirl*0.5*(0.75+0.25*sin(t*0.29))/(1.0+0.8*rr*rr)*sp;\n      vt+=om*vec3(-q.z,0.0,q.x);\n      // soft form: each particle keeps its own nested depth band, so the volume stays layered\n      float fill=uShape<0.5?0.0:(uShape<1.5?0.95:(uShape<2.5?0.78:(uShape<3.5?0.36:0.05)));\n      float h=uR*mix(0.06,0.2,aSeed);\n      float d=sdf(q)+uR*fill*(1.0-pow(aSeed,0.55));\n      float e=d-clamp(d,-h,h);\n      vec2 ep=vec2(0.02*uR,0.0);\n      vec3 gr=normalize(vec3(sdf(q+ep.xyy)-sdf(q-ep.xyy),sdf(q+ep.yxy)-sdf(q-ep.yxy),sdf(q+ep.yyx)-sdf(q-ep.yyx))+1e-5);\n      vt-=gr*clamp(e*uCoh*3.2,-uR*1.6,uR*1.6);\n      vt+=uCtrV;\n      float lo=length(q); vt-=q/max(lo,1e-4)*max(0.0,lo-uR*2.2)*1.4;\n      // first-order relaxation: acceleration is bounded, a kink in velocity cannot appear\n      vec3 v=aVel+(vt-aVel)*(1.0-exp(-uDt/uTau));\n      vPos=aPos+v*uDt; vVel=v;\n    }`;
+  const UPD_FS = `#version 300 es\n    precision mediump float; out vec4 o; void main(){ o=vec4(0); }`;
+  const VS = `#version 300 es\n    precision highp float;\n    in vec3 aPos; in vec3 aVel; in float aSeed; in float aLay;\n    uniform mat4 uProj,uView;\n    uniform float uSize,uReveal,uDpr,uCamR,uFogR,uFog,uVref;\n    out float vA; out float vF;\n    void main(){\n      float rv=smoothstep(0.0,1.0,clamp(uReveal*1.15-aSeed*0.15,0.0,1.0));\n      vec4 mv=uView*vec4(aPos,1.0);\n      gl_Position=uProj*mv;\n      float depth=max(0.001,-mv.z);\n      float far=clamp((depth-(uCamR-uFogR))/(2.0*uFogR),0.0,1.0);   // 0 near the camera, 1 at the back of the flock\n      float spd=clamp(length(aVel)/uVref,0.0,1.0);\n      vF=far*uFog;\n      vA=rv*(1.0-0.55*vF)*(0.62+0.38*spd);\n      gl_PointSize=uSize*mix(0.8,1.3,aLay)*(4.0/depth)*uDpr*(0.4+0.6*rv)*(1.18-0.34*far);\n    }`;
+  const FS = `#version 300 es\n    precision mediump float;\n    in float vA; in float vF; uniform vec3 uColor,uPaper; out vec4 o;\n    void main(){ vec2 d=gl_PointCoord-0.5; float m=smoothstep(0.5,0.12,length(d));\n      if(m<=0.001) discard; o=vec4(mix(uColor,uPaper,vF*0.55), m*0.42*vA); }`;
   function sh(type, src) {
     const s = gl.createShader(type);
     gl.shaderSource(s, src.trim());
@@ -305,17 +316,23 @@ function main() {
     if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s));
     return s;
   }
-  const prog = gl.createProgram();
-  gl.attachShader(prog, sh(gl.VERTEX_SHADER, VS));
-  gl.attachShader(prog, sh(gl.FRAGMENT_SHADER, FS));
-  gl.linkProgram(prog);
-  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog));
-  const L = {
-    aPos: gl.getAttribLocation(prog, 'aPos'),
-    aSeed: gl.getAttribLocation(prog, 'aSeed'),
-    aScl: gl.getAttribLocation(prog, 'aScl')
+  function link(vs, fs, varyings) {
+    const p = gl.createProgram();
+    gl.attachShader(p, sh(gl.VERTEX_SHADER, vs));
+    gl.attachShader(p, sh(gl.FRAGMENT_SHADER, fs));
+    if (varyings) gl.transformFeedbackVaryings(p, varyings, gl.INTERLEAVED_ATTRIBS);
+    gl.linkProgram(p);
+    if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
+    return p;
+  }
+  const progU = link(UPD, UPD_FS, [ 'vPos', 'vVel' ]), progD = link(VS, FS);
+  const uni = (p, names) => {
+    const o = {};
+    names.forEach(k => o[k] = gl.getUniformLocation(p, k));
+    return o;
   };
-  [ 'uProj', 'uView', 'uTime', 'uFlow', 'uNoise', 'uSwirl', 'uSpread', 'uSize', 'uReveal', 'uDpr', 'uColor' ].forEach(k => L[k] = gl.getUniformLocation(prog, k));
+  const UU = uni(progU, [ 'uTime', 'uDt', 'uFlow', 'uNoise', 'uSwirl', 'uR', 'uCoh', 'uPar', 'uTau', 'uShape', 'uVeil', 'uCtr', 'uCtrV', 'uAx' ]);
+  const UD = uni(progD, [ 'uProj', 'uView', 'uSize', 'uReveal', 'uDpr', 'uCamR', 'uFogR', 'uFog', 'uVref', 'uColor', 'uPaper' ]);
   const proj = new Float32Array(16), view = new Float32Array(16);
   const V = [ 0, 0, 0 ];
   function homePosition(i, shape) {
@@ -346,38 +363,106 @@ function main() {
       V[2] = Math.sin(u) * Math.sin(th);
     }
   }
-  let vao = null, buffers = [], N = 0;
+  let N = 0, cur = 0, sBuf = [ null, null ], seedBuf = null, layBuf = null, vaoU = [ null, null ], vaoD = [ null, null ];
+  const R0 = () => state.scene.spread * 1;
   function buildParticles() {
     N = Math.min(MAXCOUNT, Math.round(state.scene.count));
-    const pos = new Float32Array(N * 3), seed = new Float32Array(N), scl = new Float32Array(N), shp = Math.round(state.scene.shape);
+    const st = new Float32Array(N * 6), seed = new Float32Array(N), lay = new Float32Array(N), shp = Math.round(state.scene.shape), R = R0();
     for (let i = 0; i < N; i++) {
       homePosition(i, shp);
-      pos[i * 3] = V[0];
-      pos[i * 3 + 1] = V[1];
-      pos[i * 3 + 2] = V[2];
+      st[i * 6] = V[0] * R;
+      st[i * 6 + 1] = V[1] * R;
+      st[i * 6 + 2] = V[2] * R;
       seed[i] = fract(Math.sin(i * 3.17) * 91.7);
-      scl[i] = .6 + fract(Math.sin(i * 5.11) * 57.3) * .8;
+      lay[i] = fract(Math.sin(i * 5.11) * 57.3);
     }
-    if (vao) gl.deleteVertexArray(vao);
-    buffers.forEach(b => gl.deleteBuffer(b));
-    buffers = [];
-    vao = gl.createVertexArray();
-    gl.bindVertexArray(vao);
-    const put = (loc, data, size) => {
+    [ 0, 1 ].forEach(k => {
+      if (sBuf[k]) gl.deleteBuffer(sBuf[k]);
+      if (vaoU[k]) gl.deleteVertexArray(vaoU[k]);
+      if (vaoD[k]) gl.deleteVertexArray(vaoD[k]);
+    });
+    if (seedBuf) gl.deleteBuffer(seedBuf);
+    if (layBuf) gl.deleteBuffer(layBuf);
+    const mk = (data, usage) => {
       const b = gl.createBuffer();
-      buffers.push(b);
       gl.bindBuffer(gl.ARRAY_BUFFER, b);
-      gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
-      gl.enableVertexAttribArray(loc);
-      gl.vertexAttribPointer(loc, size, gl.FLOAT, false, 0, 0);
+      gl.bufferData(gl.ARRAY_BUFFER, data, usage);
+      return b;
     };
-    put(L.aPos, pos, 3);
-    put(L.aSeed, seed, 1);
-    put(L.aScl, scl, 1);
-    gl.bindVertexArray(null);
+    sBuf = [ mk(st, gl.DYNAMIC_COPY), mk(new Float32Array(N * 6), gl.DYNAMIC_COPY) ];
+    seedBuf = mk(seed, gl.STATIC_DRAW);
+    layBuf = mk(lay, gl.STATIC_DRAW);
+    const vao = (prog, k) => {
+      const v = gl.createVertexArray();
+      gl.bindVertexArray(v);
+      const a = n => gl.getAttribLocation(prog, n);
+      gl.bindBuffer(gl.ARRAY_BUFFER, sBuf[k]);
+      gl.enableVertexAttribArray(a('aPos'));
+      gl.vertexAttribPointer(a('aPos'), 3, gl.FLOAT, false, 24, 0);
+      gl.enableVertexAttribArray(a('aVel'));
+      gl.vertexAttribPointer(a('aVel'), 3, gl.FLOAT, false, 24, 12);
+      gl.bindBuffer(gl.ARRAY_BUFFER, seedBuf);
+      gl.enableVertexAttribArray(a('aSeed'));
+      gl.vertexAttribPointer(a('aSeed'), 1, gl.FLOAT, false, 0, 0);
+      gl.bindBuffer(gl.ARRAY_BUFFER, layBuf);
+      gl.enableVertexAttribArray(a('aLay'));
+      gl.vertexAttribPointer(a('aLay'), 1, gl.FLOAT, false, 0, 0);
+      gl.bindVertexArray(null);
+      return v;
+    };
+    vaoU = [ vao(progU, 0), vao(progU, 1) ];
+    vaoD = [ vao(progD, 0), vao(progD, 1) ];
+    cur = 0;
+    warmUp();
     needs = true;
   }
-  let az = .6, el = .22, r = 6.2, tAz = az, tEl = el, tR = r, drag = false, px = 0, py = 0;
+  const m0 = () => motionResolve(state.motion.x, state.motion.y);
+  function body(t) {
+    const R = R0(), a = R * .32;
+    const c = [ a * Math.sin(.11 * t), a * .55 * Math.sin(.13 * t + 1), a * Math.sin(.09 * t + 2) ];
+    const cv = [ a * .11 * Math.cos(.11 * t), a * .55 * .13 * Math.cos(.13 * t + 1), a * .09 * Math.cos(.09 * t + 2) ];
+    const ax = [ 1 + .22 * Math.sin(.17 * t), 1 + .22 * Math.sin(.21 * t + 1.2), 1 + .22 * Math.sin(.15 * t + 2.1) ];
+    return {
+      c: c,
+      cv: cv,
+      ax: ax,
+      R: R * (1 + .05 * Math.sin(.4 * t))
+    };
+  }
+  function step(t, dt) {
+    const b = body(t), s = state.scene, m = m0();
+    gl.useProgram(progU);
+    gl.uniform1f(UU.uTime, t);
+    gl.uniform1f(UU.uDt, dt);
+    gl.uniform1f(UU.uFlow, s.flow);
+    gl.uniform1f(UU.uNoise, s.noise);
+    gl.uniform1f(UU.uSwirl, s.swirl);
+    gl.uniform1f(UU.uR, b.R);
+    gl.uniform1f(UU.uCoh, s.cohesion);
+    gl.uniform1f(UU.uPar, s.layers);
+    gl.uniform1f(UU.uTau, lerp(.95, .14, m.ease));
+    gl.uniform1f(UU.uShape, Math.round(s.shape));
+    gl.uniform1f(UU.uVeil, s.veil);
+    gl.uniform3fv(UU.uCtr, b.c);
+    gl.uniform3fv(UU.uCtrV, b.cv);
+    gl.uniform3fv(UU.uAx, b.ax);
+    gl.bindVertexArray(vaoU[cur]);
+    gl.bindBufferBase(gl.TRANSFORM_FEEDBACK_BUFFER, 0, sBuf[1 - cur]);
+    gl.enable(gl.RASTERIZER_DISCARD);
+    gl.beginTransformFeedback(gl.POINTS);
+    gl.drawArrays(gl.POINTS, 0, N);
+    gl.endTransformFeedback();
+    gl.disable(gl.RASTERIZER_DISCARD);
+    gl.bindBufferBase(gl.TRANSFORM_FEEDBACK_BUFFER, 0, null);
+    gl.bindVertexArray(null);
+    cur = 1 - cur;
+  }
+  function warmUp() {
+    const t0 = -WARM.steps * WARM.dt;
+    for (let k = 0; k < WARM.steps; k++) step(t0 + k * WARM.dt, WARM.dt);
+    state.anim.t = 0;
+  }
+  let az = .6, el = .22, r = 5.4, tAz = az, tEl = el, tR = r, drag = false, px = 0, py = 0, spin = 0;
   canvas.addEventListener('pointerdown', e => {
     drag = true;
     px = e.clientX;
@@ -411,7 +496,7 @@ function main() {
   }
   addEventListener('resize', resize);
   const paper = () => hexRGB(state.palette[1]), ink = () => hexRGB(state.palette[0]);
-  function draw() {
+  function draw(dt) {
     gl.viewport(0, 0, canvas.width, canvas.height);
     const bg = paper();
     gl.clearColor(bg[0], bg[1], bg[2], 1);
@@ -419,29 +504,29 @@ function main() {
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
     gl.disable(gl.DEPTH_TEST);
-    gl.useProgram(prog);
-    az += (tAz - az) * .12;
-    el += (tEl - el) * .12;
-    r += (tR - r) * .12;
-    let ay = az;
-    if (state.view.autoRot) ay += state.anim.t * .15;
+    gl.useProgram(progD);
+    const k = 1 - Math.exp(-dt * 9);
+    az += (tAz - az) * k;
+    el += (tEl - el) * k;
+    r += (tR - r) * k;
+    const ay = az + spin;
     const eye = [ r * Math.cos(el) * Math.sin(ay), r * Math.sin(el), r * Math.cos(el) * Math.cos(ay) ];
     perspective(proj, 50 * Math.PI / 180, canvas.width / canvas.height, .1, 100);
     lookAt(view, eye, [ 0, 0, 0 ], [ 0, 1, 0 ]);
-    const m = motionResolve(state.motion.x, state.motion.y);
-    gl.uniformMatrix4fv(L.uProj, false, proj);
-    gl.uniformMatrix4fv(L.uView, false, view);
-    gl.uniform1f(L.uTime, state.anim.t);
-    gl.uniform1f(L.uFlow, state.scene.flow * (.5 + m.ease));
-    gl.uniform1f(L.uNoise, state.scene.noise);
-    gl.uniform1f(L.uSwirl, state.scene.swirl);
-    gl.uniform1f(L.uSpread, state.scene.spread);
-    gl.uniform1f(L.uSize, state.scene.size);
-    gl.uniform1f(L.uReveal, revealAt(state.anim.t, state.show.reveal, state.show.hold, state.anim.mode));
-    gl.uniform1f(L.uDpr, DPR);
+    const R = R0();
+    gl.uniformMatrix4fv(UD.uProj, false, proj);
+    gl.uniformMatrix4fv(UD.uView, false, view);
+    gl.uniform1f(UD.uSize, state.scene.size);
+    gl.uniform1f(UD.uDpr, DPR);
+    gl.uniform1f(UD.uReveal, clamp01(state.anim.t / Math.max(.05, state.show.reveal)));
+    gl.uniform1f(UD.uCamR, r);
+    gl.uniform1f(UD.uFogR, R * 1.5);
+    gl.uniform1f(UD.uFog, state.scene.fog);
+    gl.uniform1f(UD.uVref, R * .5 * Math.max(.3, state.scene.flow));
     const c = ink();
-    gl.uniform3f(L.uColor, c[0], c[1], c[2]);
-    gl.bindVertexArray(vao);
+    gl.uniform3f(UD.uColor, c[0], c[1], c[2]);
+    gl.uniform3f(UD.uPaper, bg[0], bg[1], bg[2]);
+    gl.bindVertexArray(vaoD[cur]);
     gl.drawArrays(gl.POINTS, 0, N);
     gl.bindVertexArray(null);
   }
@@ -449,16 +534,22 @@ function main() {
   function frame(now) {
     const dt = Math.min((now - last) / 1e3, .05);
     last = now;
-    const m = motionResolve(state.motion.x, state.motion.y);
-    if (state.anim.playing) {
-      state.anim.t += dt * state.show.speed * m.speed;
+    const m = m0(), sdt = dt * state.show.speed * m.speed;
+    if (state.anim.playing && sdt > 0) {
+      const n = Math.max(1, Math.ceil(sdt / (1 / 45))), h = sdt / n;
+      for (let k = 0; k < n; k++) {
+        simT += h;
+        step(simT, h);
+      }
+      state.anim.t += dt;
       needs = true;
+      if (state.view.autoRot) spin += dt * .07;
     }
-    if (state.view.autoRot) needs = true;
     if (needs) {
-      draw();
-      needs = state.anim.playing || state.view.autoRot || Math.abs(tAz - az) + Math.abs(tEl - el) + Math.abs(tR - r) > .001;
+      draw(dt);
+      needs = state.anim.playing || Math.abs(tAz - az) + Math.abs(tEl - el) + Math.abs(tR - r) > .001;
     }
+    window.__FRAMES++;
     fpsT += dt;
     fpsN++;
     if (fpsT >= .5) {
@@ -468,6 +559,7 @@ function main() {
     }
     requestAnimationFrame(frame);
   }
+  let simT = 0;
   const $ = s => document.querySelector(s);
   const getPath = k => k.split('.').reduce((o, p) => o[p], state);
   const setPath = (k, v) => {
@@ -475,9 +567,19 @@ function main() {
     ps.reduce((o, p) => o[p], state)[l] = v;
   };
   const defs = {
-    gShow: [ [ 'show.reveal', 'Assemble', .4, 4, .1 ], [ 'show.hold', 'Hold (loop)', .5, 8, .1 ] ],
-    gScene: [ [ 'scene.count', 'Count', 2e3, MAXCOUNT, 1e3 ], [ 'scene.spread', 'Spread', .4, 2.2, .01 ], [ 'scene.size', 'Point size', .4, 5, .05 ], [ 'scene.flow', 'Flow', 0, 2, .01 ], [ 'scene.noise', 'Turbulence', .2, 3, .01 ], [ 'scene.swirl', 'Swirl', 0, 1.5, .01 ] ]
+    gShow: [ [ 'show.reveal', 'Fade in', .1, 4, .1 ], [ 'show.rec', 'Rec length (s)', 2, 60, 1 ] ],
+    gScene: [ [ 'scene.count', 'Count', 2e3, MAXCOUNT, 1e3 ], [ 'scene.spread', 'Spread', .4, 2.2, .01 ], [ 'scene.size', 'Point size', .4, 5, .05 ], [ 'scene.flow', 'Flow', 0, 2, .01 ], [ 'scene.noise', 'Turbulence', .2, 3, .01 ], [ 'scene.swirl', 'Swirl', 0, 1.5, .01 ], [ 'scene.cohesion', 'Cohesion', 0, 2, .01 ], [ 'scene.layers', 'Layer speeds', 0, 1.5, .01 ], [ 'scene.veil', 'Veil', 0, 2, .01 ], [ 'scene.fog', 'Depth fade', 0, 1, .01 ] ]
   };
+  function extendRange(rr, nn, v) {
+    if (v > +rr.max) {
+      rr.max = v;
+      nn.max = v;
+    }
+    if (v < +rr.min) {
+      rr.min = v;
+      nn.min = v;
+    }
+  }
   function buildSliders(id, list) {
     const el = $('#' + id);
     for (const [key, name, min, max, step] of list) {
@@ -497,6 +599,7 @@ function main() {
       nn.addEventListener('change', () => {
         const x = parseFloat(nn.value);
         if (isFinite(x)) {
+          extendRange(rr, nn, x);
           setPath(key, x);
           rr.value = x;
           onParam(key);
@@ -506,7 +609,7 @@ function main() {
     }
   }
   function onParam(key) {
-    if (key === 'scene.count') buildParticles();
+    if (key === 'scene.count' || key === 'scene.spread') buildParticles();
     needs = true;
   }
   buildSliders('gShow', defs.gShow);
@@ -528,37 +631,49 @@ function main() {
     buildParticles();
   });
   const PRESETS = {
-    cloud: {
+    flock: {
       shape: 1,
-      spread: 1.1,
-      size: 1.7,
-      flow: .5,
-      noise: 1,
-      swirl: .35
-    },
-    swirl: {
-      shape: 0,
       spread: 1,
-      size: 1.5,
-      flow: .9,
-      noise: 1.4,
-      swirl: 1.1
+      size: 1.7,
+      flow: .85,
+      noise: 1,
+      swirl: .5,
+      cohesion: .6,
+      layers: .6,
+      fog: .7
     },
-    shell: {
-      shape: 0,
+    smoke: {
+      shape: 1,
       spread: 1.2,
-      size: 1.9,
-      flow: .3,
+      size: 1.5,
+      flow: 1.2,
+      noise: 1.5,
+      swirl: .2,
+      cohesion: .25,
+      layers: .9,
+      fog: .8
+    },
+    plankton: {
+      shape: 0,
+      spread: 1.1,
+      size: 1.6,
+      flow: .6,
       noise: .7,
-      swirl: .2
+      swirl: .35,
+      cohesion: .9,
+      layers: .5,
+      fog: .9
     },
     ribbon: {
       shape: 3,
       spread: 1,
       size: 1.6,
       flow: .8,
-      noise: 1.2,
-      swirl: .6
+      noise: 1.1,
+      swirl: .7,
+      cohesion: 1,
+      layers: .6,
+      fog: .7
     }
   };
   $('#presetSeg').addEventListener('click', e => {
@@ -566,9 +681,9 @@ function main() {
     if (!b) return;
     Object.assign(state.scene, PRESETS[b.dataset.p]);
     syncSeg('shapeSeg', state.scene.shape, 's');
+    syncSeg('presetSeg', b.dataset.p, 'p');
     refreshSliders();
     buildParticles();
-    state.anim.t = 0;
   });
   $('#autoRot').addEventListener('change', e => {
     state.view.autoRot = e.target.checked ? 1 : 0;
@@ -578,8 +693,10 @@ function main() {
     document.querySelectorAll('.row input[type=range]').forEach(rr => {
       const k = rr.dataset.key;
       if (!k) return;
-      rr.value = getPath(k);
-      rr.nextElementSibling.value = +(+getPath(k)).toFixed(2);
+      const v = getPath(k);
+      if (v > +rr.max) rr.max = v;
+      rr.value = v;
+      rr.nextElementSibling.value = +(+v).toFixed(2);
     });
   }
   function syncPalette() {
@@ -637,22 +754,21 @@ function main() {
     if (padDrag) padSet(e);
   });
   addEventListener('pointerup', () => padDrag = false);
-  function setLoop(on) {
-    state.anim.mode = on ? 'loop' : 'once';
-    if (on) state.anim.t = 0;
-    state.anim.playing = 1;
+  function setLive(on) {
+    state.anim.playing = on ? 1 : 0;
+    last = performance.now();
     $('#tLoop').setAttribute('aria-pressed', on);
+    $('#tLoop').textContent = on ? '● Live' : '❚❚ Paused';
     needs = true;
   }
   $('#tPlay').addEventListener('click', () => {
+    buildParticles();
     state.anim.t = 0;
-    state.anim.playing = 1;
-    needs = true;
+    setLive(true);
   });
-  $('#tLoop').addEventListener('click', () => setLoop(state.anim.mode !== 'loop'));
-  $('#tHold').addEventListener('input', e => state.show.hold = +e.target.value);
+  $('#tLoop').addEventListener('click', () => setLive(!state.anim.playing));
   $('#tSpeed').addEventListener('input', e => state.show.speed = +e.target.value);
-  $('#tHold').value = state.show.hold;
+  $('#tSpeed').value = state.show.speed;
   function invert() {
     const on = canvas.classList.toggle('__scninv');
     $('#invBtn').setAttribute('aria-pressed', on);
@@ -663,9 +779,13 @@ function main() {
     if ([ 'INPUT', 'TEXTAREA', 'SELECT' ].includes(t)) return;
     if (e.key.toLowerCase() === 'i') invert();
     if (e.key.toLowerCase() === 'h') document.body.classList.toggle('noui');
+    if (e.key === ' ') {
+      e.preventDefault();
+      setLive(!state.anim.playing);
+    }
   });
   $('#pngBtn').addEventListener('click', () => {
-    draw();
+    draw(.016);
     const a = document.createElement('a');
     a.download = 'particles.png';
     a.href = canvas.toDataURL('image/png');
@@ -673,7 +793,10 @@ function main() {
   });
   let recorder = null;
   $('#recBtn').addEventListener('click', () => {
-    if (recorder) return;
+    if (recorder) {
+      if (recorder.state === 'recording') recorder.stop();
+      return;
+    }
     const st = canvas.captureStream(60);
     const mime = MediaRecorder.isTypeSupported('video/webm;codecs=vp9') ? 'video/webm;codecs=vp9' : 'video/webm';
     recorder = new MediaRecorder(st, {
@@ -692,19 +815,17 @@ function main() {
       recorder = null;
       $('#recBtn').textContent = '● Rec WebM';
     };
-    state.anim.t = 0;
     recorder.start();
     $('#recBtn').textContent = '■ Stop';
-    const cyc = (state.show.reveal + state.show.hold + 1.2) / Math.max(.1, state.show.speed);
     setTimeout(() => {
       if (recorder && recorder.state === 'recording') recorder.stop();
-    }, cyc * 1e3 + 200);
+    }, state.show.rec * 1e3);
   });
   $('#saveCfg').addEventListener('click', () => {
     const a = document.createElement('a');
     a.download = 'particles-3d.json';
     a.href = URL.createObjectURL(new Blob([ JSON.stringify({
-      version: 1,
+      version: 2,
       scene: state.scene,
       motion: state.motion,
       show: state.show,
@@ -731,18 +852,50 @@ function main() {
       syncPalette();
       drawPad();
       buildParticles();
-      $('#tHold').value = state.show.hold;
       $('#tSpeed').value = state.show.speed;
       $('#autoRot').checked = !!state.view.autoRot;
     });
   });
   $('#hideBtn').addEventListener('click', () => document.body.classList.toggle('noui'));
+  window.__sim = {
+    get N() {
+      return N;
+    },
+    step(dt, n) {
+      for (let k = 0; k < (n || 1); k++) {
+        simT += dt;
+        step(simT, dt);
+      }
+    },
+    read(n) {
+      n = Math.min(n || N, N);
+      const o = new Float32Array(n * 6);
+      gl.bindBuffer(gl.COPY_READ_BUFFER, sBuf[cur]);
+      gl.getBufferSubData(gl.COPY_READ_BUFFER, 0, o);
+      return o;
+    },
+    reset() {
+      buildParticles();
+      simT = 0;
+      state.anim.t = 0;
+    },
+    get t() {
+      return simT;
+    },
+    state: state,
+    draw() {
+      draw(.016);
+    }
+  };
+  document.getElementById('autoRot').checked = !!state.view.autoRot;
   resize();
   syncPalette();
   syncSeg('shapeSeg', state.scene.shape, 's');
+  syncSeg('presetSeg', 'flock', 'p');
   buildParticles();
   drawPad();
   new ResizeObserver(drawPad).observe(mpad);
+  window.__READY = 1;
   requestAnimationFrame(frame);
 }
 </script>
