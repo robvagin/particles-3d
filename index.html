@@ -278,7 +278,9 @@ function main() {
       cohesion: .9,
       layers: .6,
       fog: .7,
-      veil: .7
+      veil: 1,
+      soft: 0,
+      mix: .6
     },
     motion: {
       x: .4,
@@ -304,8 +306,8 @@ function main() {
     steps: 96,
     dt: 1 / 24
   };
-  const NOISE = `\n    vec3 hash3(vec3 p){\n      p=vec3(dot(p,vec3(127.1,311.7,74.7)),dot(p,vec3(269.5,183.3,246.1)),dot(p,vec3(113.5,271.9,124.6)));\n      return -1.0+2.0*fract(sin(p)*43758.5453123); }\n    vec4 noised(vec3 x){\n      vec3 i=floor(x), f=fract(x);\n      vec3 u=f*f*f*(f*(f*6.0-15.0)+10.0), du=30.0*f*f*(f*(f-2.0)+1.0);\n      vec3 ga=hash3(i), gb=hash3(i+vec3(1,0,0)), gc=hash3(i+vec3(0,1,0)), gd=hash3(i+vec3(1,1,0));\n      vec3 ge=hash3(i+vec3(0,0,1)), gf=hash3(i+vec3(1,0,1)), gg=hash3(i+vec3(0,1,1)), gh=hash3(i+vec3(1,1,1));\n      float va=dot(ga,f), vb=dot(gb,f-vec3(1,0,0)), vc=dot(gc,f-vec3(0,1,0)), vd=dot(gd,f-vec3(1,1,0));\n      float ve=dot(ge,f-vec3(0,0,1)), vf=dot(gf,f-vec3(1,0,1)), vg=dot(gg,f-vec3(0,1,1)), vh=dot(gh,f-vec3(1,1,1));\n      return vec4(\n        va+u.x*(vb-va)+u.y*(vc-va)+u.z*(ve-va)+u.x*u.y*(va-vb-vc+vd)+u.y*u.z*(va-vc-ve+vg)+u.z*u.x*(va-vb-ve+vf)+(-va+vb+vc-vd+ve-vf-vg+vh)*u.x*u.y*u.z,\n        ga+u.x*(gb-ga)+u.y*(gc-ga)+u.z*(ge-ga)+u.x*u.y*(ga-gb-gc+gd)+u.y*u.z*(ga-gc-ge+gg)+u.z*u.x*(ga-gb-ge+gf)+(-ga+gb+gc-gd+ge-gf-gg+gh)*u.x*u.y*u.z\n        +du*(vec3(vb,vc,ve)-va+u.yzx*vec3(va-vb-vc+vd,va-vc-ve+vg,va-vb-ve+vf)+u.zxy*vec3(va-vb-ve+vf,va-vb-vc+vd,va-vc-ve+vg)+u.yzx*u.zxy*(-va+vb+vc-vd+ve-vf-vg+vh))); }\n    // divergence-free field: curl of a vector potential made of three noises\n    vec3 curl(vec3 p){\n      vec3 g0=noised(p).yzw, g1=noised(p+vec3(31.4,17.2,9.1)).yzw, g2=noised(p+vec3(-12.7,24.6,41.3)).yzw;\n      return vec3(g2.y-g1.z, g0.z-g2.x, g1.x-g0.y); }`;
-  const UPD = `#version 300 es\n    precision highp float;\n    in vec3 aPos; in vec3 aVel; in float aSeed; in float aLay;\n    uniform float uTime,uDt,uFlow,uNoise,uSwirl,uR,uCoh,uPar,uTau,uShape,uVeil;\n    uniform vec3 uCtr,uCtrV,uAx;\n    out vec3 vPos; out vec3 vVel;\n    ${NOISE}\n    float sdf(vec3 q){\n      vec3 s=q/uAx;\n      if(uShape<1.5)  return (length(s)-uR)*min(uAx.x,min(uAx.y,uAx.z));\n      if(uShape<2.5){ vec3 d=abs(s)-vec3(uR*0.78); return length(max(d,0.0))+min(max(d.x,max(d.y,d.z)),0.0); }\n      if(uShape<3.5){ vec2 t=vec2(length(s.xz)-uR*0.85,s.y); return length(t)-uR*0.36; }\n      vec2 d=vec2(length(s.xz)-uR,abs(s.y)-uR*0.05); return min(max(d.x,d.y),0.0)+length(max(d,0.0)); }\n    void main(){\n      float t=uTime, l=aLay;\n      float grp=min(2.0,floor(l*3.0));                       // three layers: own veils, own pace\n      float sp=1.0+uPar*(grp-1.0)*0.55;\n      vec3 q=aPos-uCtr;\n      vec3 off=vec3(sin(t*0.071),cos(t*0.053),sin(t*0.062+1.0))*2.7+vec3(grp*13.7,grp*5.3,-grp*8.1);\n      float f1=uNoise/uR;\n      // large, slow curl: moves matter along itself without piling up\n      vec3 c=curl(q*f1*0.62+off)+0.35*curl(q*f1*1.45+off*1.7+vec3(7.0,3.0,5.0));\n      vec3 vt=c*(uFlow*uR*0.5)*sp;\n      // veils: slide toward the zero-set of a slow scalar field, so the cloud gathers into thin moving sheets\n      vec4 nv=noised(q*f1*0.78+off*0.8+vec3(3.0,9.0,1.0));\n      vt-=uVeil*uR*0.55*nv.x*nv.yzw*sp;\n      float rr=length(q.xz)/uR;\n      float om=uSwirl*0.5*(0.75+0.25*sin(t*0.29))/(1.0+0.8*rr*rr)*sp;\n      vt+=om*vec3(-q.z,0.0,q.x);\n      // soft form: each particle keeps its own nested depth band, so the volume stays layered\n      float fill=uShape<0.5?0.0:(uShape<1.5?0.95:(uShape<2.5?0.78:(uShape<3.5?0.36:0.05)));\n      float h=uR*mix(0.06,0.2,aSeed);\n      float d=sdf(q)+uR*fill*(1.0-pow(aSeed,0.55));\n      float e=d-clamp(d,-h,h);\n      vec2 ep=vec2(0.02*uR,0.0);\n      vec3 gr=normalize(vec3(sdf(q+ep.xyy)-sdf(q-ep.xyy),sdf(q+ep.yxy)-sdf(q-ep.yxy),sdf(q+ep.yyx)-sdf(q-ep.yyx))+1e-5);\n      vt-=gr*clamp(e*uCoh*3.2,-uR*1.6,uR*1.6);\n      vt+=uCtrV;\n      float lo=length(q); vt-=q/max(lo,1e-4)*max(0.0,lo-uR*2.2)*1.4;\n      // first-order relaxation: acceleration is bounded, a kink in velocity cannot appear\n      vec3 v=aVel+(vt-aVel)*(1.0-exp(-uDt/uTau));\n      vPos=aPos+v*uDt; vVel=v;\n    }`;
+  const NOISE = `\n    vec3 hash3(vec3 p){\n      p=vec3(dot(p,vec3(127.1,311.7,74.7)),dot(p,vec3(269.5,183.3,246.1)),dot(p,vec3(113.5,271.9,124.6)));\n      return -1.0+2.0*fract(sin(p)*43758.5453123); }\n    vec4 noised(vec3 x){\n      vec3 i=floor(x), f=fract(x);\n      vec3 u=f*f*f*(f*(f*6.0-15.0)+10.0), du=30.0*f*f*(f*(f-2.0)+1.0);\n      vec3 ga=hash3(i), gb=hash3(i+vec3(1,0,0)), gc=hash3(i+vec3(0,1,0)), gd=hash3(i+vec3(1,1,0));\n      vec3 ge=hash3(i+vec3(0,0,1)), gf=hash3(i+vec3(1,0,1)), gg=hash3(i+vec3(0,1,1)), gh=hash3(i+vec3(1,1,1));\n      float va=dot(ga,f), vb=dot(gb,f-vec3(1,0,0)), vc=dot(gc,f-vec3(0,1,0)), vd=dot(gd,f-vec3(1,1,0));\n      float ve=dot(ge,f-vec3(0,0,1)), vf=dot(gf,f-vec3(1,0,1)), vg=dot(gg,f-vec3(0,1,1)), vh=dot(gh,f-vec3(1,1,1));\n      return vec4(\n        va+u.x*(vb-va)+u.y*(vc-va)+u.z*(ve-va)+u.x*u.y*(va-vb-vc+vd)+u.y*u.z*(va-vc-ve+vg)+u.z*u.x*(va-vb-ve+vf)+(-va+vb+vc-vd+ve-vf-vg+vh)*u.x*u.y*u.z,\n        ga+u.x*(gb-ga)+u.y*(gc-ga)+u.z*(ge-ga)+u.x*u.y*(ga-gb-gc+gd)+u.y*u.z*(ga-gc-ge+gg)+u.z*u.x*(ga-gb-ge+gf)+(-ga+gb+gc-gd+ge-gf-gg+gh)*u.x*u.y*u.z\n        +du*(vec3(vb,vc,ve)-va+u.yzx*vec3(va-vb-vc+vd,va-vc-ve+vg,va-vb-ve+vf)+u.zxy*vec3(va-vb-ve+vf,va-vb-vc+vd,va-vc-ve+vg)+u.yzx*u.zxy*(-va+vb+vc-vd+ve-vf-vg+vh))); }\n    // divergence-free field: curl of a vector potential A made of three noises, windowed by W:\n    // curl(W·A) = W·curl A + ∇W × A. Where W reaches 0 the flow is tangent to the edge, so nothing ever leaves the form\n    vec3 curlW(vec3 p,float W,vec3 gW,float F){\n      vec4 n0=noised(p), n1=noised(p+vec3(31.4,17.2,9.1)), n2=noised(p+vec3(-12.7,24.6,41.3));\n      vec3 A=vec3(n0.x,n1.x,n2.x);\n      vec3 cu=vec3(n2.z-n1.w, n0.w-n2.y, n1.y-n0.z);\n      return W*cu+cross(gW,A)/F; }`;
+  const UPD = `#version 300 es\n    precision highp float;\n    in vec3 aPos; in vec3 aVel; in float aSeed; in float aLay;\n    uniform float uTime,uDt,uFlow,uNoise,uSwirl,uR,uCoh,uPar,uTau,uShape,uVeil,uWid,uMix;\n    uniform vec3 uCtr,uCtrV,uAx;\n    out vec3 vPos; out vec3 vVel;\n    ${NOISE}\n    float sdf(vec3 q){\n      vec3 s=q/uAx;\n      if(uShape<1.5)  return (length(s)-uR)*min(uAx.x,min(uAx.y,uAx.z));\n      if(uShape<2.5){ vec3 d=abs(s)-vec3(uR*0.78); return length(max(d,0.0))+min(max(d.x,max(d.y,d.z)),0.0); }\n      if(uShape<3.5){ vec2 t=vec2(length(s.xz)-uR*0.85,s.y); return length(t)-uR*0.36; }\n      vec2 d=vec2(length(s.xz)-uR,abs(s.y)-uR*0.05); return min(max(d.x,d.y),0.0)+length(max(d,0.0)); }\n    void main(){\n      float t=uTime, l=aLay;\n      float grp=min(2.0,floor(l*3.0));                       // three layers: own veils, own pace\n      float sp=1.0+uPar*(grp-1.0)*0.55;\n      vec3 q=aPos-uCtr;\n      vec3 off=vec3(sin(t*0.071),cos(t*0.053),sin(t*0.062+1.0))*2.7+vec3(grp*13.7,grp*5.3,-grp*8.1);\n      float f1=uNoise/uR;\n      // distance to the soft form and its gradient\n      float d=sdf(q);\n      vec2 ep=vec2(0.02*uR,0.0);\n      vec3 gr=normalize(vec3(sdf(q+ep.xyy)-sdf(q-ep.xyy),sdf(q+ep.yxy)-sdf(q-ep.yxy),sdf(q+ep.yyx)-sdf(q-ep.yyx))+1e-5);\n      bool shell=uShape<0.5;\n      float dd=shell?abs(d)-uR*0.2:d;                         // <0 inside the allowed region\n      vec3 gdd=shell?gr*sign(d):gr;\n      float wid=shell?uR*0.22:uR*uWid;\n      float x=clamp(-dd/wid,0.0,1.0);\n      float W=x*x*(3.0-2.0*x), dW=6.0*x*(1.0-x)/wid;          // smoothstep window and its slope\n      vec3 gW=-gdd*dW;\n      if(uWid<0.001){ W=1.0; gW=vec3(0.0); }                  // no window: an open, soft-edged cloud\n      // large, slow curl, then finer octaves: matter moves along itself without piling up\n      vec3 c=curlW(q*f1*0.62+off,W,gW,f1*0.62)\n            +0.4*curlW(q*f1*1.45+off*1.7+vec3(7.0,3.0,5.0),W,gW,f1*1.45)\n            +0.3*curlW(q*f1*3.4+off*2.3+vec3(2.0,8.0,4.0),W,gW,f1*3.4)\n            +uMix*curlW(q*f1*8.0+off*3.1+vec3(5.0,1.0,9.0),W,gW,f1*8.0);\n      vec3 vt=c*(uFlow*uR*0.5)*sp;\n      // veils: slide toward the zero-set of a slow scalar field, so the cloud gathers into soft moving sheets\n      vec4 nv=noised(q*f1*0.78+off*0.8+vec3(3.0,9.0,1.0));\n      vt-=W*uVeil*uR*0.55*(nv.x-clamp(nv.x,-0.1,0.1))*nv.yzw*sp;\n      float rr=length(q.xz)/uR;\n      float om=uSwirl*0.5*(0.75+0.25*sin(t*0.29))/(1.0+0.8*rr*rr)*sp;\n      vt+=om*vec3(-q.z,0.0,q.x);\n      // whatever does stray over the edge is called back gently (the form is soft, not a wall)\n      float bh=uR*mix(0.14,0.34,aSeed);\n      float e=shell?d-clamp(d,-bh,bh):max(d,0.0);\n      vt-=gr*clamp(e*abs(e)/uR*uCoh*3.0+e*uCoh*0.6,-uR*1.6,uR*1.6);\n      vt+=uCtrV;\n      float lo=length(q); vt-=q/max(lo,1e-4)*max(0.0,lo-uR*2.2)*1.4;\n      // first-order relaxation: acceleration is bounded, a kink in velocity cannot appear\n      vec3 v=aVel+(vt-aVel)*(1.0-exp(-uDt/uTau));\n      vPos=aPos+v*uDt; vVel=v;\n    }`;
   const UPD_FS = `#version 300 es\n    precision mediump float; out vec4 o; void main(){ o=vec4(0); }`;
   const VS = `#version 300 es\n    precision highp float;\n    in vec3 aPos; in vec3 aVel; in float aSeed; in float aLay;\n    uniform mat4 uProj,uView;\n    uniform float uSize,uReveal,uDpr,uCamR,uFogR,uFog,uVref;\n    out float vA; out float vF;\n    void main(){\n      float rv=smoothstep(0.0,1.0,clamp(uReveal*1.15-aSeed*0.15,0.0,1.0));\n      vec4 mv=uView*vec4(aPos,1.0);\n      gl_Position=uProj*mv;\n      float depth=max(0.001,-mv.z);\n      float far=clamp((depth-(uCamR-uFogR))/(2.0*uFogR),0.0,1.0);   // 0 near the camera, 1 at the back of the flock\n      float spd=clamp(length(aVel)/uVref,0.0,1.0);\n      vF=far*uFog;\n      vA=rv*(1.0-0.55*vF)*(0.62+0.38*spd);\n      gl_PointSize=uSize*mix(0.8,1.3,aLay)*(4.0/depth)*uDpr*(0.4+0.6*rv)*(1.18-0.34*far);\n    }`;
   const FS = `#version 300 es\n    precision mediump float;\n    in float vA; in float vF; uniform vec3 uColor,uPaper; out vec4 o;\n    void main(){ vec2 d=gl_PointCoord-0.5; float m=smoothstep(0.5,0.12,length(d));\n      if(m<=0.001) discard; o=vec4(mix(uColor,uPaper,vF*0.55), m*0.42*vA); }`;
@@ -331,7 +333,7 @@ function main() {
     names.forEach(k => o[k] = gl.getUniformLocation(p, k));
     return o;
   };
-  const UU = uni(progU, [ 'uTime', 'uDt', 'uFlow', 'uNoise', 'uSwirl', 'uR', 'uCoh', 'uPar', 'uTau', 'uShape', 'uVeil', 'uCtr', 'uCtrV', 'uAx' ]);
+  const UU = uni(progU, [ 'uTime', 'uDt', 'uFlow', 'uNoise', 'uSwirl', 'uR', 'uCoh', 'uPar', 'uTau', 'uShape', 'uVeil', 'uWid', 'uMix', 'uCtr', 'uCtrV', 'uAx' ]);
   const UD = uni(progD, [ 'uProj', 'uView', 'uSize', 'uReveal', 'uDpr', 'uCamR', 'uFogR', 'uFog', 'uVref', 'uColor', 'uPaper' ]);
   const proj = new Float32Array(16), view = new Float32Array(16);
   const V = [ 0, 0, 0 ];
@@ -363,7 +365,7 @@ function main() {
       V[2] = Math.sin(u) * Math.sin(th);
     }
   }
-  let N = 0, cur = 0, sBuf = [ null, null ], seedBuf = null, layBuf = null, vaoU = [ null, null ], vaoD = [ null, null ];
+  let N = 0, cur = 0, sBuf = [ null, null ], tfo = [ null, null ], seedBuf = null, layBuf = null, vaoU = [ null, null ], vaoD = [ null, null ];
   const R0 = () => state.scene.spread * 1;
   function buildParticles() {
     N = Math.min(MAXCOUNT, Math.round(state.scene.count));
@@ -392,6 +394,13 @@ function main() {
     sBuf = [ mk(st, gl.DYNAMIC_COPY), mk(new Float32Array(N * 6), gl.DYNAMIC_COPY) ];
     seedBuf = mk(seed, gl.STATIC_DRAW);
     layBuf = mk(lay, gl.STATIC_DRAW);
+    [ 0, 1 ].forEach(k => {
+      if (tfo[k]) gl.deleteTransformFeedback(tfo[k]);
+      tfo[k] = gl.createTransformFeedback();
+      gl.bindTransformFeedback(gl.TRANSFORM_FEEDBACK, tfo[k]);
+      gl.bindBufferBase(gl.TRANSFORM_FEEDBACK_BUFFER, 0, sBuf[k]);
+    });
+    gl.bindTransformFeedback(gl.TRANSFORM_FEEDBACK, null);
     const vao = (prog, k) => {
       const v = gl.createVertexArray();
       gl.bindVertexArray(v);
@@ -440,20 +449,22 @@ function main() {
     gl.uniform1f(UU.uR, b.R);
     gl.uniform1f(UU.uCoh, s.cohesion);
     gl.uniform1f(UU.uPar, s.layers);
-    gl.uniform1f(UU.uTau, lerp(.95, .14, m.ease));
+    gl.uniform1f(UU.uTau, lerp(.5, .1, m.ease));
     gl.uniform1f(UU.uShape, Math.round(s.shape));
     gl.uniform1f(UU.uVeil, s.veil);
+    gl.uniform1f(UU.uWid, s.soft);
+    gl.uniform1f(UU.uMix, s.mix);
     gl.uniform3fv(UU.uCtr, b.c);
     gl.uniform3fv(UU.uCtrV, b.cv);
     gl.uniform3fv(UU.uAx, b.ax);
     gl.bindVertexArray(vaoU[cur]);
-    gl.bindBufferBase(gl.TRANSFORM_FEEDBACK_BUFFER, 0, sBuf[1 - cur]);
+    gl.bindTransformFeedback(gl.TRANSFORM_FEEDBACK, tfo[1 - cur]);
     gl.enable(gl.RASTERIZER_DISCARD);
     gl.beginTransformFeedback(gl.POINTS);
     gl.drawArrays(gl.POINTS, 0, N);
     gl.endTransformFeedback();
     gl.disable(gl.RASTERIZER_DISCARD);
-    gl.bindBufferBase(gl.TRANSFORM_FEEDBACK_BUFFER, 0, null);
+    gl.bindTransformFeedback(gl.TRANSFORM_FEEDBACK, null);
     gl.bindVertexArray(null);
     cur = 1 - cur;
   }
@@ -568,7 +579,7 @@ function main() {
   };
   const defs = {
     gShow: [ [ 'show.reveal', 'Fade in', .1, 4, .1 ], [ 'show.rec', 'Rec length (s)', 2, 60, 1 ] ],
-    gScene: [ [ 'scene.count', 'Count', 2e3, MAXCOUNT, 1e3 ], [ 'scene.spread', 'Spread', .4, 2.2, .01 ], [ 'scene.size', 'Point size', .4, 5, .05 ], [ 'scene.flow', 'Flow', 0, 2, .01 ], [ 'scene.noise', 'Turbulence', .2, 3, .01 ], [ 'scene.swirl', 'Swirl', 0, 1.5, .01 ], [ 'scene.cohesion', 'Cohesion', 0, 2, .01 ], [ 'scene.layers', 'Layer speeds', 0, 1.5, .01 ], [ 'scene.veil', 'Veil', 0, 2, .01 ], [ 'scene.fog', 'Depth fade', 0, 1, .01 ] ]
+    gScene: [ [ 'scene.count', 'Count', 2e3, MAXCOUNT, 1e3 ], [ 'scene.spread', 'Spread', .4, 2.2, .01 ], [ 'scene.size', 'Point size', .4, 5, .05 ], [ 'scene.flow', 'Flow', 0, 2, .01 ], [ 'scene.noise', 'Turbulence', .2, 3, .01 ], [ 'scene.swirl', 'Swirl', 0, 1.5, .01 ], [ 'scene.cohesion', 'Cohesion', 0, 2, .01 ], [ 'scene.layers', 'Layer speeds', 0, 1.5, .01 ], [ 'scene.veil', 'Veil', 0, 2.5, .01 ], [ 'scene.mix', 'Mixing', 0, 1.5, .01 ], [ 'scene.fog', 'Depth fade', 0, 1, .01 ] ]
   };
   function extendRange(rr, nn, v) {
     if (v > +rr.max) {
@@ -634,46 +645,54 @@ function main() {
     flock: {
       shape: 1,
       spread: 1,
-      size: 1.7,
+      size: 1.9,
       flow: .85,
       noise: 1,
       swirl: .5,
       cohesion: .6,
       layers: .6,
-      fog: .7
+      fog: .7,
+      veil: 1,
+      mix: .6
     },
     smoke: {
       shape: 1,
-      spread: 1.2,
-      size: 1.5,
-      flow: 1.2,
-      noise: 1.5,
+      spread: .95,
+      size: 1.7,
+      flow: 1.1,
+      noise: 1.4,
       swirl: .2,
-      cohesion: .25,
+      cohesion: .6,
       layers: .9,
-      fog: .8
+      fog: .8,
+      veil: 1.4,
+      mix: .8
     },
     plankton: {
       shape: 0,
-      spread: 1.1,
+      spread: .9,
       size: 1.6,
       flow: .6,
       noise: .7,
       swirl: .35,
       cohesion: .9,
       layers: .5,
-      fog: .9
+      fog: .9,
+      veil: .6,
+      mix: .4
     },
     ribbon: {
       shape: 3,
       spread: 1,
-      size: 1.6,
+      size: 1.8,
       flow: .8,
       noise: 1.1,
       swirl: .7,
       cohesion: 1,
       layers: .6,
-      fog: .7
+      fog: .7,
+      veil: 1,
+      mix: .5
     }
   };
   $('#presetSeg').addEventListener('click', e => {
@@ -872,6 +891,7 @@ function main() {
       const o = new Float32Array(n * 6);
       gl.bindBuffer(gl.COPY_READ_BUFFER, sBuf[cur]);
       gl.getBufferSubData(gl.COPY_READ_BUFFER, 0, o);
+      gl.bindBuffer(gl.COPY_READ_BUFFER, null);
       return o;
     },
     reset() {

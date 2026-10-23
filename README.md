@@ -5,7 +5,7 @@
 <h1 align="center">Particles 3D</h1>
 
 <p align="center">
-  A WebGL2 cloud of up to 300,000 particles<br>
+  A living cloud of particles that flows like smoke or a flock<br>
   one HTML file · runs in the browser · no install · free and open source
 </p>
 
@@ -17,13 +17,13 @@
 
 ---
 
-A cloud that assembles itself, holds and breathes out again. Plain WebGL2, no libraries.
+Thousands of points that never stop moving: they drift in a curl-noise flow, keep a soft shape and breathe in layers at different speeds. Plain WebGL2, no libraries.
 
 ## What it does
 
-- **Up to 300,000 particles** on a desktop (90,000 on phones)
-- **Home shapes:** sphere, ball, box, torus and disc; presets cloud, shell, swirl and ribbon
-- **Show:** assemble, hold and loop, with a motion pad for speed and character
+- **Four moods:** Flock, Smoke, Plankton and Ribbon
+- **Alive by design:** each point has a speed, the flow sets the speed and the position follows, so the motion never jerks
+- **Depth:** three layers at different speeds and fog by distance
 - **Grayscale palette** with a one-key invert
 - **Record** the canvas to WebM, export PNG and a JSON config
 
